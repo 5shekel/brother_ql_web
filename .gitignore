@@ -116,3 +116,6 @@ venv.bak/
 /cats
 
  **/.secrets.toml.swp
+
+ # direnv
+ .direnv

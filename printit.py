@@ -4,6 +4,7 @@ import requests
 import io
 import glob
 import base64
+import hashlib
 import os
 import re
 import tempfile
@@ -28,7 +29,7 @@ if 'label_type' not in st.session_state:
 def find_and_parse_printer():
     """Find and parse Brother QL printer information."""
     model_manager = ModelsManager()
-    
+
     # Debug print to show we're searching
     print("Searching for Brother QL printer...")
 
@@ -38,7 +39,7 @@ def find_and_parse_printer():
             backend = backend_factory(backend_name)
             available_devices = backend["list_available_devices"]()
             print(f"Found {len(available_devices)} devices with {backend_name} backend")
-            
+
             for printer in available_devices:
                 print(f"Found device: {printer}")
                 identifier = printer["identifier"]
@@ -51,7 +52,7 @@ def find_and_parse_printer():
                 protocol = parts[0]
                 device_info = parts[2]
                 serial_number = parts[3]
-                
+
                 try:
                     vendor_id, product_id = device_info.split(":")
                 except ValueError:
@@ -60,7 +61,7 @@ def find_and_parse_printer():
 
                 # Default model
                 model = "QL-570"
-                
+
                 # Try to match product ID to determine actual model
                 try:
                     product_id_int = int(product_id, 16)
@@ -84,7 +85,7 @@ def find_and_parse_printer():
                 }
                 print(f"Found printer: {printer_info}")
                 return printer_info
-                
+
         except Exception as e:
             print(f"Error with backend {backend_name}: {str(e)}")
             continue
@@ -96,20 +97,20 @@ def get_printer_label_info():
     printer_info = find_and_parse_printer()
     if not printer_info:
         return None, "No printer found"
-    
+
     try:
         # First try to get status using brother_ql command line tool
         cmd = f"brother_ql -b pyusb --model {printer_info['model']} -p {printer_info['identifier']} status"
         result = subprocess.run(cmd, shell=True, capture_output=True, text=True)
-        
+
         # If command succeeded and we got output
         if result.returncode == 0 and result.stdout:
             status_output = result.stdout
             print(f"Printer status output: {status_output}")  # Debug print
-            
+
             # Parse the status output
             media_width_mm = None
-            
+
             for line in status_output.split('\n'):
                 if 'Media size:' in line:
                     try:
@@ -119,7 +120,7 @@ def get_printer_label_info():
                         print(f"Detected media width: {media_width_mm}mm")  # Debug print
                     except ValueError:
                         continue
-            
+
             if media_width_mm is not None:
                 # Map physical width in mm to brother_ql label types
                 label_sizes = {
@@ -133,11 +134,11 @@ def get_printer_label_info():
                     103: "103",   # 1200 dots printable
                     104: "104"    # 1200 dots printable
                 }
-                
+
                 if media_width_mm in label_sizes:
                     label_type = label_sizes[media_width_mm]
                     return label_type, f"Detected {label_type} ({media_width_mm}mm)"
-        
+
         # If we couldn't get the width from status, check if it's in printer_info
         if 'model' in printer_info:
             # Default mappings for common models
@@ -159,10 +160,10 @@ def get_printer_label_info():
             }
             if printer_info['model'] in model_defaults:
                 return model_defaults[printer_info['model']], f"Using default for {printer_info['model']}"
-        
+
         # If all else fails, return a safe default
         return "62", "Using safe default width"
-        
+
     except Exception as e:
         print(f"Error getting printer status: {str(e)}")  # Debug print
         return "62", f"Error getting printer status, using default"
@@ -240,7 +241,7 @@ copy = int(st.query_params.get("copy", [1])[0])  # Default to 1 copy if not spec
 def list_saved_images(filter_duplicates=True):
     # Get history limit from secrets with default fallback of 15
     history_limit = st.secrets.get("history_limit", 15)
-    
+
     # Get all image files from both temp and labels folders
     temp_files = glob.glob(os.path.join("temp", "*.[pj][np][g]*"))
     label_files = glob.glob(os.path.join("labels", "*.[pj][np][g]*"))
@@ -250,7 +251,7 @@ def list_saved_images(filter_duplicates=True):
 
     # Filter out test labels and get valid images
     valid_images = [
-        f for f in image_files 
+        f for f in image_files
         if "write_something" not in os.path.basename(f).lower()
     ]
 
@@ -265,7 +266,7 @@ def list_saved_images(filter_duplicates=True):
         try:
             # Get file size in bytes
             file_size = os.path.getsize(image_path)
-            
+
             # If this size already exists, compare modification times
             if file_size in unique_images:
                 existing_time = os.path.getmtime(unique_images[file_size])
@@ -281,37 +282,14 @@ def list_saved_images(filter_duplicates=True):
     # Sort by modification time (newest first)
     return sorted(unique_images.values(), key=os.path.getmtime, reverse=True)[:history_limit]
 
-
-# Replace the get_fonts function
 def get_fonts():
-    """Return list of fonts with 5x5-Tami.ttf as default"""
-    default_font = "fonts/5x5-Tami.ttf"
-    
-    # Check if our default font exists
-    if os.path.exists(default_font):
-        try:
-            # Verify it's a valid font
-            ImageFont.truetype(default_font, 12)
-            return [default_font]  # Only return our custom font if it exists and works
-        except Exception as e:
-            print(f"Error loading 5x5-Tami.ttf: {e}")
-    
-    # If we get here, either the font doesn't exist or failed to load
-    # Return system fonts as fallback
-    return [
-        "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf",  # Linux
-        "C:/Windows/Fonts/arial.ttf",  # Windows
-        "/System/Library/Fonts/Helvetica.ttf",  # macOS
-    ]
-
+    return [ "fonts/" + i for i in os.listdir("fonts/") if i.endswith(".ttf")]
 
 def safe_filename(text):
-    # Sanitize the text to remove illegal characters and replace spaces with underscores
-    sanitized_text = re.sub(r'[<>:"/\\|?*\n\r]+', "", text).replace(" ", "_")
     # Get the current time in epoch format
     epoch_time = int(time.time())
     # Return the filename
-    return f"{epoch_time}_{sanitized_text}.png"
+    return f"{epoch_time}_{hashlib.sha256(text.encode()).hexdigest()}.png"
 
 
 # Ensure label directory exists
@@ -321,10 +299,10 @@ os.makedirs(label_dir, exist_ok=True)
 
 def generate_image(prompt, steps):
     payload = {"prompt": prompt, "steps": steps, "width": label_width}
-    
+
     # Get txt2img_url from secrets with default fallback
     txt2img_url = st.secrets.get("txt2img_url", "http://localhost:7860")
-    
+
     # Show warning if using default URL
     if txt2img_url == "http://localhost:7860":
         st.warning("Using default Stable Diffusion URL (http://localhost:7860). Configure txt2img_url in .streamlit/secrets.toml for custom endpoint.")
@@ -385,7 +363,7 @@ def generate_image(prompt, steps):
 def preper_image(image, label_width=label_width):
     # Debug print original image size
     # print(f"Original image size: {image.size}")
-    
+
     # Handle PNG transparency by adding white background
     if image.mode == "RGBA":
         # Create a white background image
@@ -456,7 +434,7 @@ def print_image(image, rotate=0, dither=False):
 
     # Start monitoring job status
     status = print_queue.get_job_status(job_id)
-    
+
     # Show job status in UI
     status_container = st.empty()
     while status.status in ["pending", "processing"]:
@@ -477,9 +455,9 @@ def show_queue_status():
     # Check if queue view is enabled in secrets (default to False)
     if not st.secrets.get("queueview", False):
         return
-        
+
     status = print_queue.get_queue_status()
-    
+
     # Only show status if there are jobs in queue or currently processing
     if status["queue_size"] > 0 or status["is_processing"]:
         # Create a small container in the top-right corner
@@ -495,10 +473,10 @@ def show_queue_status():
                     margin-top: -1em;
                 }
                 </style>
-                """, 
+                """,
                 unsafe_allow_html=True
             )
-            
+
             # Use a single line for each job status
             for job_id, job_info in status["jobs"].items():
                 status_color = {
@@ -507,7 +485,7 @@ def show_queue_status():
                     "completed": "🟢",
                     "failed": "🔴"
                 }.get(job_info["status"], "⚪")
-                
+
                 # Show job ID (first 8 chars) and status
                 status_text = f"{status_color} Job {job_id[:8]}: {job_info['status']}"
                 if job_info["error"]:
@@ -539,7 +517,7 @@ def get_cat_breeds():
     cat_api_key = st.secrets.get("cat_api_key", "")
     if not cat_api_key or cat_api_key == "ask me":
         return ["API key required"]
-    
+
     try:
         response = requests.get(
             "https://api.thecatapi.com/v1/breeds",
@@ -607,7 +585,7 @@ def apply_levels(image, black_point=0, white_point=255):
     """Apply levels adjustment to an image"""
     if image.mode != 'L':
         image = image.convert('L')
-    
+
     # Create lookup table for the transformation
     lut = []
     for i in range(256):
@@ -620,7 +598,7 @@ def apply_levels(image, black_point=0, white_point=255):
             # Linear mapping between black and white points
             normalized = (i - black_point) / (white_point - black_point)
             lut.append(int(normalized * 255))
-    
+
     return image.point(lut)
 
 
@@ -628,10 +606,10 @@ def apply_histogram_equalization(image, black_point=0, white_point=255):
     """Apply histogram equalization with levels adjustment to an image"""
     if image.mode != 'L':
         image = image.convert('L')
-    
+
     # First apply levels adjustment
     leveled = apply_levels(image, black_point, white_point)
-    
+
     # Then apply histogram equalization
     return ImageOps.equalize(leveled)
 
@@ -643,7 +621,7 @@ if not os.path.exists(".streamlit/secrets.toml"):
     Please set up your `.streamlit/secrets.toml` file:
     1. Copy the example file: `cp .streamlit/secrets.toml.example .streamlit/secrets.toml`
     2. Edit the file with your settings
-    
+
     The app will try to auto-detect your printer's label type, but you can override it in secrets.toml if needed.
     See the example file for all available options and their descriptions.
     """)
@@ -735,7 +713,7 @@ with tab1:
 
         # Create 'temp' directory if it doesn't exist
         os.makedirs("temp", exist_ok=True)
-        
+
         # Save original image
         image_to_process.save(original_image_path, "PNG")
 
@@ -824,7 +802,7 @@ with tab2:
         fonts = get_fonts()
         font = fonts[0]  # Default to first available font
         alignment = "center"
-        
+
         # Initialize font selection in session state if not already present
         if "selected_font" not in st.session_state:
             st.session_state.selected_font = fonts[0]
@@ -836,7 +814,7 @@ with tab2:
             st.error("5x5-Tami.ttf font not found! Please ensure the fonts directory exists and contains 5x5-Tami.ttf")
             st.info("You can download it from the project repository")
             font = None  # Mark font as unavailable
-            
+
         if font is None:
             st.stop()  # Stop execution if font is not available
 
@@ -846,12 +824,12 @@ with tab2:
             chars_per_line = max(len(line) for line in text.split('\n'))
             if chars_per_line == 0:
                 chars_per_line = 1
-            
+
             print(f"Debug font sizing:")
             print(f"- Label type: {label_type}")
             print(f"- Label width: {label_width} dots")
             print(f"- Longest line: {chars_per_line} characters")
-            
+
             # Base sizes for different label types
             if label_type == "62":  # 62mm label
                 base_font_size = 60
@@ -863,24 +841,24 @@ with tab2:
                 # For other sizes, scale from 62mm base
                 base_font_size = 60
                 base_width = 696
-            
+
             # First scale based on width ratio
             width_scale = label_width / base_width
             scaled_base_size = int(base_font_size * width_scale)
-            
+
             # Then scale based on text length (14 chars is our reference)
             base_text_length = 14  # "write something" length
             text_scale = base_text_length / chars_per_line
             font_size = int(scaled_base_size * text_scale)
-            
+
             # Ensure minimum size of 20
             font_size = max(font_size, 20)
-            
+
             print(f"- Base font size: {base_font_size}")
             print(f"- Width scale: {width_scale:.2f}")
             print(f"- Text scale: {text_scale:.2f}")
             print(f"- Final font size: {font_size}")
-            
+
             max_size = font_size
         except Exception as e:
             max_size = 60  # Default to known good size for 62mm
@@ -928,18 +906,19 @@ with tab2:
                         base_width = 696  # Width of 62mm label
                         width_scale = label_width / base_width
                         font_size = int(60 * width_scale)  # Scale from base size of 60
-                    
+
                     print(f"Font size recalculated:")
                     print(f"- Label type: {label_type}")
                     print(f"- Label width: {label_width} dots")
                     print(f"- Font size: {font_size}")
-                    
+
                     max_size = font_size
                 else:
                     max_size = calculate_max_font_size(label_width, text, font)
             except Exception as e:
                 print(f"Error calculating font size for {font}: {e}")
             font_size = st.slider("Font Size", 20, max_size + 50, max_size)
+        line_spacing = st.slider("Line Spacing", 0, 200, 10)
 
         # Font Size
         try:
@@ -951,7 +930,6 @@ with tab2:
                 st.warning(f"Font {font} not found, using default font. Please ensure fonts/5x5-Tami.ttf exists.")
             except Exception as e:
                 st.error(f"Error loading font: {e}")
-        line_spacing = 20  # Adjust this value to set the desired line spacing
 
         # Calculate the new image height based on the bounding boxes
         new_image_height = calculate_actual_image_height_with_empty_lines(
@@ -1109,15 +1087,15 @@ with tab4:
 with tab5:
     st.subheader(":printer: a cat")
     st.caption("from the fine folks at https://thecatapi.com/")
-    
+
     # Initialize session state for cat image if not exists
     if 'cat_image' not in st.session_state:
         st.session_state.cat_image = None
         st.session_state.cat_dithered = None
-    
+
     # Check if Cat API key exists and is valid
     cat_api_key = st.secrets.get("cat_api_key", "")
-    
+
     if not cat_api_key or cat_api_key == "ask me":
         st.warning("⚠️ Cat API key is not configured")
         st.info("Add your cat_api_key to .streamlit/secrets.toml")
@@ -1135,14 +1113,14 @@ with tab5:
                 # Download and process image
                 img = Image.open(io.BytesIO(requests.get(image_url).content)).convert('RGB')
                 grayscale_image, dithered_image = preper_image(img)
-                
+
                 # Store in session state
                 st.session_state.cat_image = grayscale_image
                 st.session_state.cat_dithered = dithered_image
-                
+
             except Exception as e:
                 st.error(f"Error fetching cat: {str(e)}")
-        
+
         # Show image and print button if we have a cat
         if st.session_state.cat_dithered is not None:
             st.image(st.session_state.cat_dithered, caption="Cat!")
@@ -1153,7 +1131,7 @@ with tab5:
 # Add the new mask tab content before the history tab
 with tab6:
     st.subheader("Mask Pro")
-    
+
     uploaded_file = st.file_uploader("Choose an image for mask...", type=["jpg", "jpeg", "png", "gif", "webp", "bmp"], key="mask_uploader")
 
     if uploaded_file is not None:
@@ -1165,7 +1143,7 @@ with tab6:
                 background = Image.new("RGBA", image.size, "white")
                 image = Image.alpha_composite(background, image)
             image = image.convert("RGB")
-            
+
             col1, col2 = st.columns([1, 1])
 
             with col1:
@@ -1176,20 +1154,20 @@ with tab6:
                 invert_checkbox = st.checkbox("Invert Image", value=False)
                 border_checkbox = st.checkbox("Show border in preview", value=True, help="Adds a border in the preview to help visualize boundaries (not printed)")
                 equalize_checkbox = st.checkbox("Apply Histogram Equalization", value=False, help="Enhance image contrast")
-                
+
                 # Add target width in mm option
                 target_width_mm = st.number_input("Target Width (mm)", min_value=0, value=0)
-                
+
                 # Disable rotation if target width is specified
                 rotate_disabled = target_width_mm > 0
                 rotate_checkbox = st.checkbox("rotate 90deg", value=False, disabled=rotate_disabled)
                 if rotate_disabled and rotate_checkbox:
                     st.info("Rotation disabled when target width is specified")
-                
+
                 # Apply target width resizing if specified
                 if target_width_mm > 0:
                     image = resize_image_to_width(image, target_width_mm)
-                
+
                 if mirror_checkbox:
                     image = ImageOps.mirror(image)
 
@@ -1245,7 +1223,7 @@ with tab6:
                 else:
                     print_image(display_image, rotate=rotate, dither=False)
                 st.success("Print job sent to printer!")
-                
+
         except Exception as e:
             st.error(f"Error processing image: {str(e)}")
             st.info("Please try another image or format")
@@ -1253,7 +1231,7 @@ with tab6:
 # history tab
 with tab7:
     st.subheader("Gallery of Labels and Stickers")
-    
+
     # Only process history if this tab is selected
     if tab7:  # This checks if the tab is active
         # Initialize session state variables if they don't exist
@@ -1265,10 +1243,10 @@ with tab7:
             st.session_state.search_query = ""
         if 'filter_duplicates' not in st.session_state:
             st.session_state.filter_duplicates = True
-        
+
         # Get pagination settings from secrets with defaults
         items_per_page = st.secrets.get("items_per_page", 5)  # Default to 3x3 grid
-        
+
         # Search, filter, and refresh controls
         col1, col2, col3 = st.columns([3, 2, 1])
         with col1:
@@ -1290,13 +1268,13 @@ with tab7:
 
         # Filter images based on search query
         filtered_images = [
-            img for img in st.session_state.saved_images_list 
+            img for img in st.session_state.saved_images_list
             if search_query.lower() in os.path.basename(img).lower()
         ]
 
         # Pagination
         total_pages = max((len(filtered_images) - 1) // items_per_page + 1, 1)
-        
+
         # Pagination controls
         col1, col2, col3 = st.columns([1, 2, 1])
         with col1:
@@ -1313,11 +1291,11 @@ with tab7:
         # Calculate start and end indices for current page
         start_idx = st.session_state.page_number * items_per_page
         end_idx = min(start_idx + items_per_page, len(filtered_images))
-        
+
         # Display current page images
         cols_per_row = 3
         current_page_images = filtered_images[start_idx:end_idx]
-        
+
         # Show total count of filtered images
         st.caption(f"Showing {len(current_page_images)} of {len(filtered_images)} images")
 
